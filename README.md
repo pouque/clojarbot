@@ -2,6 +2,13 @@
 
 You read src.
 
+## How to build
+
+You need to have [clojure boot](https://github.com/boot-clj/boot).
+
+As you can see in the `build.boot` there is a `build` task defined
+so you need to run just `boot build` command.
+
 ## License
 
 Copyright © 2017 Alexey Slaykovsky <alexey@slaykovsky.com>

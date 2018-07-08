@@ -1,14 +1,18 @@
 (ns clojarbot.core
-  (require [clojure.core.async :as async :refer [thread]]
-           [clojure.data.json :as json]
-           [clojure.core.match :refer [match]])
-  (use [clojure.string :as strings :only [includes?
-                                          lower-case
-                                          index-of
-                                          split
-                                          triml
-                                          starts-with?
-                                          replace]]))
+  (:gen-class)
+  (require [clojure.core.async
+            :as async
+            :refer [go]]
+           [clojure.data.json :as json])
+  (use [clojure.string
+        :as strings
+        :only [includes?
+               lower-case
+               index-of
+               split
+               triml
+               starts-with?
+               replace]]))
 
 (import java.net.Socket)
 (import java.io.BufferedReader)
@@ -22,17 +26,23 @@
 (def user (format "%s 0 * :little-lisp bot" nick))
 (def channel "#lor")
 
-(defn connect [address port]
+;;; Every command is a good command when it contains
+;;; exclamation mark and 3 letters, example "!gif ".
+;;; The length of a string drop to get an argument or
+;;; arguments is 5.
+(def command-drop-length 5)
+
+(defn connect! [address port]
   (println (format "Connecting to: %s:%d" address port))
   (let [socket (Socket. address port)]
-      (if (.isConnected socket) socket nil)))
+    (if (.isConnected socket) socket nil)))
 
-(defn write [writer command data]
+(defn write! [writer command data]
   (do
     (.write writer (format "%s %s\r\n" command data))
     (println (format "> %s %s\n" command data))))
 
-(def socket (connect address port))
+(def socket (connect! address port))
 
 (def reader
   (BufferedReader.
@@ -44,14 +54,14 @@
     (OutputStreamWriter.
       (.getOutputStream socket))))
 
-(defn clean-line [line]
+(defn clear-line [line]
   (apply str (drop 1 (drop-while #(not= \: %) (drop 1 line)))))
 
-(defn read-one-line [socket]
+(defn read-one-line! [socket]
   (.readLine socket))
 
 (defn connected? [reader]
-  (let [line (read-one-line reader)]
+  (let [line (read-one-line! reader)]
     (cond
       (nil? line)
       (do (println "Something went wrong")
@@ -69,14 +79,14 @@
       (do (println line)
           (recur reader)))))
 
-(defn login [reader writer]
-  (write writer "NICK" nick)
-  (write writer "USER" user)
+(defn login! [reader writer]
+  (write! writer "NICK" nick)
+  (write! writer "USER" user)
   (.flush writer)
   (connected? reader))
 
-(defn join-channel [writer]
-  (write writer "JOIN" channel)
+(defn join-channel! [writer]
+  (write! writer "JOIN" channel)
   (.flush writer))
   
 (def pong-answer '("pong" "понг" "PONG!" "пунг"))
@@ -92,20 +102,31 @@
       (subs line start (index-of line "!"))
       channel)))
 
-(defn answer-server-ping [writer]
-  (write writer "PONG" nick)
+(defn get-command-argument [command-line]
+  (apply str (drop command-drop-length command-line)))
+
+(defn answer-server-ping! [writer]
+  (write! writer "PONG" nick)
   (.flush writer))
 
+;;; Not used now (anymore???)
 (defn privmsg! [writer messages]
   (doseq [message messages]
-    (write writer "PRIVMSG" message))
+    (write! writer "PRIVMSG" message))
   (.flush writer))
 
-(defn answer-to-a-curse [writer]
-  (privmsg! writer [(format "%s :%s" channel "Разврат и содомия!")]))
+(defn notice! [writer messages]
+  (doseq [message messages]
+    (write! writer "NOTICE" message))
+  (.flush writer))
 
-(def greeters '("hi" "hello" "hola" "nazdar" "aloha" "ahoj" "sieg heil"
-                "привет" "хай" "дратути" "прив" "sholom" "шолом" "шалом"))
+(defn answer-to-a-curse! [writer]
+  (notice! writer
+           [(format "%s :%s" channel "Разврат и содомия!")]))
+
+(def greeters
+  '("hi" "hello" "hola" "nazdar" "aloha" "ahoj" "sieg heil"
+    "привет" "хай" "дратути" "прив" "sholom" "шолом" "шалом"))
 (defn get-random-greeter []
   (rand-nth greeters))
 
@@ -114,15 +135,17 @@
 (defn get-random-gif [topic]
   (let [response (json/read-str (slurp (apply str [giphy-random-url topic])))]
     (let [url (get (get response "data") "image_url")]
-      (match [url]
-             [nil] "giphy does not have anything for you, bro ;("
-             [_] url))))
+      (if (nil? [url])
+        "giphy does not have anything for you, bro ;("
+        url))))
 
-(defn write-gif-url [writer topic]
-  (privmsg! writer [(format "%s :%s" channel (get-random-gif topic))]))
+(defn write-gif-url! [writer topic]
+  (notice! writer
+           [(format "%s :%s" channel (get-random-gif topic))]))
 
 (defn get-topic [line]
-  (strings/replace (apply str (drop 5 line)) #"\s" "%20"))
+  (strings/replace
+   (get-command-argument line) #"\s" "%20"))
 
 (def gay-spam (atom {}))
 (defn update-gays [m line]
@@ -133,71 +156,94 @@
 (defn get-most-gay [m]
   (apply max-key val @m))
 
+(defn get-most-gay-val [m]
+  (val (get-most-gay m)))
+
+(defn get-most-gay-name [m]
+  (key (get-most-gay m)))
+
+(defn get-gay-score [m username]
+  (get @m username))
+
 (defn get-gay-string [m line]
-  (let [clear-line (clean-line line)]
-    (if (= (apply str (drop 5 clear-line)) "")
-      (format "%s is a natural born gay" (key (get-most-gay m)))
-      (let [username (apply str (drop 5 clear-line))]
+  (let [clean-line (clear-line line)]
+    (let [username (get-command-argument clean-line)]
+      (if (= username "")
+        (format "%s is a natural born gay" (get-most-gay-name m))
         (let [gay-score (get @m username)]
           (if (nil? gay-score)
             (format "%s is not gay" username)
-            (let [most-gay-val (val (get-most-gay m))]
+            (let [most-gay-val (get-most-gay-val m)]
               (let [gay-percentage (* 100 (/ gay-score most-gay-val))]
-                (format "%s is %s percent gay" username gay-percentage)))))))))
+                (format "%s is %s percent gay"
+                        username gay-percentage)))))))))
 
-(defn write-gay [writer line]
-    (privmsg! writer [(format "%s :%s" channel (get-gay-string gay-spam line))]))
+(defn write-gay! [writer line]
+  (notice! writer
+           [(format "%s :%s"
+                    channel
+                    (get-gay-string gay-spam line))]))
 
-(defn read-channel [reader writer]
-  (let [raw-line (read-one-line reader)]
+(defn read-channel! [reader writer]
+  (let [raw-line (read-one-line! reader)]
     (if (not (nil? raw-line))
-      (let [line (clean-line raw-line)]
+      (let [line (clear-line raw-line)]
         (println raw-line)
         (async/go
           (update-gays gay-spam raw-line))
 
         (cond
           (starts-with? raw-line "PING :")
-          (async/thread (answer-server-ping writer))
+          (async/go (answer-server-ping! writer))
 
           (starts-with? line "!gay")
-          (async/thread
-            (write-gay writer raw-line))
+          (async/go
+            (write-gay! writer raw-line))
 
           (starts-with? line "!gif")
-          (async/thread
-            (write-gif-url writer (get-topic line)))
+          (async/go
+            (write-gif-url! writer (get-topic line)))
 
           (if-includes? line '("sex" "разврат" "содомия"
                                "панин" "секс" "ебля"
                                "трах" "ебать"))
-          (async/thread (answer-to-a-curse writer))
+          (async/go (answer-to-a-curse! writer))
 
           (if-includes? line '("русня" "русак" "рузьге" "русский"))
-          (async/thread
-            (privmsg! writer [(format "%s :русофобию в чяте ощущаю я" channel)]))
-          
+          (async/go
+            (notice! writer [(format "%s :русофобию в чяте ощущаю я" channel)]))
+
           (includes? line nick)
           (cond
             (if-includes? line '("ping" "пинг"))
-            (async/thread
-              (privmsg! writer [(format "%s :%s: %s" channel (extract-nick raw-line) (get-random-pong))]))
-              
+            (async/go
+              (notice! writer
+                       [(format "%s :%s: %s"
+                                channel
+                                (extract-nick raw-line)
+                                (get-random-pong))]))
+
             (if-includes? line '("хуй" "dick" "гей" "gay"))
-            (async/thread
-              (privmsg! writer [(format "%s :%s: сам три дня не умывался!" channel (extract-nick raw-line))]))
-                       
+            (async/go
+              (notice! writer
+                       [(format "%s :%s: сам три дня не умывался!"
+                                channel
+                                (extract-nick raw-line))]))
+
             (if-includes? line greeters)
-            (async/thread
-              (privmsg! writer [(format "%s :%s: %s" channel (extract-nick raw-line) (get-random-greeter))])))))
+            (async/go
+              (notice! writer
+                       [(format "%s :%s: %s"
+                                channel
+                                (extract-nick raw-line)
+                                (get-random-greeter))])))))
 
       (System/exit 1)))
   (recur reader writer))
 
 (defn -main []
   (cond (not (nil? socket))
-        (cond (login reader writer)
+        (cond (login! reader writer)
               (do
-                (join-channel writer)
-                (read-channel reader writer)))))
- 
+                (join-channel! writer)
+                (read-channel! reader writer)))))
